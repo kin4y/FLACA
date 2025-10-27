@@ -1,0 +1,26 @@
+# Create and write a template for .gitignore
+gitignore_content = """
+# Ignore all images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.svg
+*.HEIC
+__pycache__/
+*.pyc
+
+# Ignore all Jupyter notebooks
+*.ipynb
+
+# Ignore hidden system files
+.DS_Store
+"""
+
+with open(".gitignore", "w") as f:
+    f.write(gitignore_content)
+
+print("Created .gitignore!")
