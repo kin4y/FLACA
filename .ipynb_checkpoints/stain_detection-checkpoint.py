@@ -837,6 +837,5 @@ def detect_stains(pathA,
         
         # With constrained_layout=True, you typically don't need plt.subplots_adjust or plt.tight_layout()
         plt.show()
-        return ratio
 
 
