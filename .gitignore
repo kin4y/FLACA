@@ -1,15 +1,6 @@
 # Create and write a template for .gitignore
 gitignore_content = """
-# Ignore all images
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.bmp
-*.tiff
-*.webp
-*.svg
-*.HEIC
+
 __pycache__/
 *.pyc
 
