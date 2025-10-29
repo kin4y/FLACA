@@ -1,15 +1,32 @@
-# 🚀 How to Run This Uvicorn App (for Total Beginners)
+# How to use FLACA (Installing Instructions follow)
+After successfully installing FLACA and all dependencies locally on your computer you are able to run it from your console by running 
+```bash
+uvicorn app:app --reload
+```
+After the startup has been successful open your favorite browser and head to ttp://localhost:8000. You will be directed to the Homepage where you will have two choices to choose from: 
+## Color Analysis
+### Overview 
+The color analysis tool is dedicated to Flaca. It provides you a breakdown of the used colors of an image by combining the collection of all pixels in a predefined ab-grid in CIELab space. For now pixels are stacked for their color values (a,b) only and the Lightness value L is ignored. This offers a more human-friendly visualization of the color palette in the image. Further the color palette is aurtomatically grouped into a number of colors using k-means. This number can be chosen by the user. You will be able to see the colorpalette and the groupings. For every group you can visualize which part of the image is categorized into this color group. Further you will be provided with a percentage number representing the ratio of pixels grouped into the chosen color group. It is important to mention that currently only rectangular 2D objects are supported and the percentage is only valid with respect to the whole picture. This means especially that background is taken into accound which needds to be taken into account. Nevertheless if the background is uniformly colored, simple mathematics will allow you to come up with a reasonable number anyway. More on this later. 
+### Uploading a picture
+On the page for color analysis you see a **Choose File** Button where you can upload a picture. *HEIC Iphone pictures are to be converted to jpg or png formats. Generally it is not advised to use exotic formats. The error handling is not very extensive and hasn't been tested thoroughly. In the case an error followed by unexpected behaviour simply restart the program. 
+### Select number of Colors (k)
+This part is the most crucial part in this section. Look at the picture and come up with a number of colors you want to have your image grouped in. Since the grouping is performed automatically based on how "far" the colors are from each other try to come up with groupings where all the colors within a group look similar and the colors in the groups are distinct from each other. Sometimes it might help to run the analysis with an arbitrary number of color to see the palette and the initial groupings for getting a feeling of how the groups are done. 
+![image info](./media/egypt.png)
+In this example
+
+
+# How to Install FLACA (for Total Beginners)
 
 This guide explains *exactly* how to set up and run this Python web app using **Uvicorn** — even if you’ve never programmed before.  
 Follow every step carefully, and you’ll have the app running locally in your browser!
 
 ---
 
-## 🧠 What This App Is
+## What This App Is
 This project runs a **FastAPI / Uvicorn** web server.  
 Once it’s running, you can open your browser and visit:
 
-👉 **http://localhost:8000**
+**http://localhost:8000**
 
 That’s where your app will appear.
 
@@ -21,7 +38,7 @@ uvicorn app:app --reload
 
 ---
 
-## 📦 Step 0 — Get the Code from GitHub
+## Step 0 — Get the Code from GitHub
 
 You’ll first need to download or clone the project from GitHub.  
 The link will be provided later (for example):
@@ -30,7 +47,7 @@ The link will be provided later (for example):
 https://github.com/USERNAME/FLACA
 ```
 
-### 🪣 Steps:
+### Steps:
 
 1. Create a folder called **FLACA** anywhere on your computer (for example, on your Desktop).  
 2. Open your browser and go to the GitHub repository link.  
@@ -50,7 +67,7 @@ FLACA/
 
 ---
 
-## 🪄 Quick Overview of What We’ll Do
+## Quick Overview of What We’ll Do
 
 1. Install **Python 3**
 2. Create a **folder named FLACA**
@@ -62,12 +79,12 @@ FLACA/
 
 ---
 
-## 🧩 Step-by-Step Instructions
-## 🧭 Understanding the Terminal (Command Line)
+## Step-by-Step Instructions
+## Understanding the Terminal (Command Line)
 Before you can install or run the app, you’ll need to use something called the **terminal** (also known as the **command line** or **console**).  
 Don’t worry — it’s just a simple window where you type commands instead of clicking buttons.
 
-### 🖥️ What Is the Terminal?
+### What Is the Terminal?
 
 Think of the terminal as a text-based control center for your computer.  
 Instead of using your mouse, you type instructions directly — for example, to install Python packages, start your app, or navigate folders.
@@ -79,8 +96,8 @@ uvicorn app:app --reload
 ```
 it means you’ll type or paste that line into your terminal and press Enter.
 
-### 💡 How to Open the Terminal
-#### 🪟 Windows
+### How to Open the Terminal
+#### Windows
 You have a few easy options:
 
 Press Windows key + R, type cmd, and press Enter → opens Command Prompt
@@ -89,13 +106,13 @@ Or click Start → type “cmd” → press Enter
 
 Or use PowerShell (works the same): click Start → type “PowerShell” → press Enter
 
-👉 Once open, you’ll see something like:
+Once open, you’ll see something like:
 ```bash
 C:\Users\YourName>
 ```
 That’s your terminal waiting for a command.
 
-#### 🍎 macOS
+#### macOS
 Open Finder
 
 Go to Applications → Utilities
@@ -108,7 +125,7 @@ You’ll see something like:
 ```bash
 MacBook-Air:~ yourname$
 ```
-#### 🐧 Linux
+#### Linux
 Most Linux systems already have Terminal installed.
 
 Press Ctrl + Alt + T
@@ -120,7 +137,7 @@ You’ll see something like:
 ```bash
 user@computer:~$
 ```
-### 🧱 What You’ll Use the Terminal For
+### What You’ll Use the Terminal For
 Throughout this guide, you’ll use the terminal to:
 
 Navigate to your project folder  
@@ -150,12 +167,12 @@ uvicorn app:app --reload
 That’s it! Every command in this guide should be typed or pasted into the terminal and executed by pressing Enter.
 
 If you make a typo, just press the Up Arrow key to recall the last command, fix it, and hit Enter again.
-### 1️⃣ Install Python
+### Install Python
 You need **Python 3.9 or newer**.
 
 - **Windows:**  
   Download and install from [python.org/downloads](https://www.python.org/downloads/).  
-  ✅ **IMPORTANT:** Check the box “Add Python to PATH” during installation!
+  **IMPORTANT:** Check the box “Add Python to PATH” during installation!
 
 - **Mac:**  
   Use [python.org/downloads](https://www.python.org/downloads/) or run:
@@ -185,7 +202,7 @@ Python 3.10.12
 
 ---
 
-### 2️⃣ Navigate to the FLACA Folder
+### Navigate to the FLACA Folder
 
 Once you’ve downloaded the GitHub code and placed it in your **FLACA** folder, open a terminal:
 
@@ -208,23 +225,23 @@ cd %USERPROFILE%\Desktop\FLACA
 
 ---
 
-### 3️⃣ Create a Virtual Environment
+### Create a Virtual Environment
 
 This keeps the app’s dependencies separate from your system. Use the same terminal as you just opened above.
 
-#### 💻 On macOS / Linux:
+#### On macOS / Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-#### 💻 On Windows (Command Prompt):
+#### On Windows (Command Prompt):
 ```cmd
 python -m venv .venv
 .venv\Scripts\activate
 ```
 
-#### 💻 On Windows (PowerShell):
+#### On Windows (PowerShell):
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -234,7 +251,7 @@ If you see `(.venv)` at the start of your terminal prompt, the environment is ac
 
 ---
 
-### 4️⃣ Install Required Packages
+### Install Required Packages
 
 Now that your environment is active, install all the necessary packages.
 
@@ -246,7 +263,7 @@ pip install -r requirements.txt
 
 ---
 
-### 5️⃣ Run the App 🎉
+### Run the App 
 
 With everything set up, start the app by running:
 
@@ -268,15 +285,15 @@ INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 
 ---
 
-### 6️⃣ Open the App in Your Browser
+### Open the App in Your Browser
 
 Go to:
 
-👉 [http://localhost:8000](http://localhost:8000)
+[http://localhost:8000](http://localhost:8000)
 
 ---
 
-### 7️⃣ Stop the Server
+### Stop the Server
 
 When you’re done, stop the app by pressing in the terminal:
 
@@ -288,7 +305,7 @@ That stops the running server.
 
 ---
 
-## ⚙️ Common Problems and Fixes
+## Common Problems and Fixes
 
 | Problem | What to Do |
 |----------|-------------|
@@ -302,7 +319,7 @@ That stops the running server.
 
 ---
 
-## ✅ Final Quick Summary
+## Final Quick Summary
 
 To recap, here’s everything in one place:
 
@@ -328,5 +345,5 @@ uvicorn app:app --reload
 http://localhost:8000
 ```
 
-That’s it! 🎉  
+That’s it!  
 You’ve successfully installed and run your **FLACA Uvicorn App** locally.

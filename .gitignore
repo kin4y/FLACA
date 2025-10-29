@@ -13,8 +13,15 @@ gitignore_content = """
 __pycache__/
 *.pyc
 
-# Ignore all Jupyter notebooks
+# Ignore Jupyter notebook files
 *.ipynb
+
+# Ignore Jupyter notebook checkpoint folders and files
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+**/.ipynb_checkpoints/*
+**/.ipynb_checkpoints/*.ipynb
+**/.ipynb_checkpoints/README-checkpoint.md
 
 # Ignore hidden system files
 .DS_Store
