@@ -12,7 +12,33 @@ On the page for color analysis you see a **Choose File** Button where you can up
 ### Select number of Colors (k)
 This part is the most crucial part in this section. Look at the picture and come up with a number of colors you want to have your image grouped in. Since the grouping is performed automatically based on how "far" the colors are from each other try to come up with groupings where all the colors within a group look similar and the colors in the groups are distinct from each other. Sometimes it might help to run the analysis with an arbitrary number of color to see the palette and the initial groupings for getting a feeling of how the groups are done. 
 ![image info](./media/egypt.png)
-In this example
+In this example we choose to group into four color clusters: 
+1. Red 
+2. Blue
+3. lighter Brown
+4. darker Brown
+### Advanced Settings
+#### Currently implemented 
+1. pie_show_labels deactivate if you want to see the pie chart labels
+2. show_input plots the input image
+3. show_plots_initial lets you see the ungrouped color charts on the initial Lab grid for a finegrained color distinction without grouping. 
+4. show_plots_final Shows the grouped colors.
+5. random_seed determines the randomness for reproduction. Algorithms like K-Means for grouping use random seed pixels as starting points. If you want to have reproducable results use a number and pass it to the person verifying your results.
+6. shrink_img shrinks the image by this factor for speed. Default is 0.1 which is a lot but sufficient for 4k images. If you have resolutions about 1000x1000 try with 1.0. If you have resulutions above 4k try with 0.1 to 0.05. This number heavily determines the speed of the program. Lower number -> Faster but lower precision. Higher Number (maximal 1.0) -> slower but higher precision.
+7. ab_step defined how finegrained your initial Lab grid is. The bigger the number the more you force the colors into the predefined grid because the grid "tiles" are bigger. Around 1 has proven to be a good number. 
+#### Under developement
+These variables are active and have a change on the analysis
+1. top_n_chroma limit the chromatic colors to an upper limit. This is experimental.
+2. top_n_achro limit the achromatic colors to an upper limit. This is experimental
+3. L_thres Threshold for what is considered as a color pixel vs dark pixel
+4. C_thresh Threshold for what is considered as a color pixel vs achromatic pixel (white, grey, black etc.) In practise some brownish pixels usually are categorized in this too
+5. point_size 
+6. size_mode
+
+### Results (Final Plots)
+#### Grouping
+![image info](./media/palette.png)
+This Plot shows the color palette and the grouping into the desired number of colors. As mentioned above the grouping is done automatically on euclidean color distance in LAB space. There are two palettes to be more precise. One for the chromatic pixels and one for achromatic ones. The groupings are symbolized by using
 
 
 # How to Install FLACA (for Total Beginners)
