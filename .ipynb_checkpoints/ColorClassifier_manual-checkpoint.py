@@ -921,7 +921,18 @@ def _get_lab_features_in_combined_order(bundle):
     X_ac = gb['achro']['lab_rep'][idx_ac] if idx_ac.size else np.zeros((0, 3), dtype=float)
 
     X = np.vstack([X_ch, X_ac]) if (X_ch.size or X_ac.size) else np.zeros((0, 3), dtype=float)
-    return X
+    
+    # get raw counts per bin in each group
+    counts_ch = gb["chroma"]["counts"]
+    counts_ac = gb["achro"]["counts"]
+    
+    # reorder counts into the same combined order
+    counts_ch_ordered = counts_ch[idx_ch]
+    counts_ac_ordered = counts_ac[idx_ac]
+    
+    # build full counts vector
+    counts_for_X = np.concatenate([counts_ch_ordered, counts_ac_ordered])
+    return X, counts_for_X
 
 
 def kmeans_bins_from_bundle(bundle, n_clusters=4, random_state=0, normalize=True):
@@ -933,7 +944,8 @@ def kmeans_bins_from_bundle(bundle, n_clusters=4, random_state=0, normalize=True
         'n_clusters': int,
       }
     """
-    X = _get_lab_features_in_combined_order(bundle)
+    X, counts = _get_lab_features_in_combined_order(bundle)
+ 
     if X.size == 0:
         raise ValueError("No bins available for clustering.")
 
@@ -945,7 +957,7 @@ def kmeans_bins_from_bundle(bundle, n_clusters=4, random_state=0, normalize=True
 
     if _HAS_SK:
         km = KMeans(n_clusters=n_clusters, n_init=10, random_state=random_state)
-        labels = km.fit_predict(X_proc)
+        labels = km.fit_predict(X_proc, sample_weight=counts)
         centers = km.cluster_centers_
         if normalize:
             centers = centers * sd + mu

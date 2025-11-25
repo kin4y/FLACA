@@ -1,26 +1,50 @@
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import RedirectResponse # NEW IMPORT
 import uvicorn
 import tempfile
 import shutil
 import os
 import uuid
 import matplotlib
+import numpy as np
+import cv2
+import io
+import json
 
+# Set Matplotlib backend
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Import custom modules
 from ColorClassifier_manual import k_color_analysis, visualize_color_cluster
 from stain_detection import detect_stains
 
 app = FastAPI(title="Archaeological Image Analysis Suite")
 
+# ---------- Configuration ---------- #
 STATIC_DIR = "static_results"
+TEMP_DIR = "temp_uploads"
 os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+
 app.mount("/static_results", StaticFiles(directory=STATIC_DIR), name="static_results")
+app.mount("/temp_uploads", StaticFiles(directory=TEMP_DIR), name="temp_uploads")
 
 active_bundles = {}
+
+# ---------- Defaults ---------- #
+color_defaults = {
+    "k": 5, "L_thresh": 30.0, "C_thresh": 0.1, "ab_step": 1.0, "point_size": 12,
+    "size_mode": "sqrt", "top_n_chroma": "", "top_n_achro": "",
+    "pie_show_labels": "True", "show_input": "True", "show_plots_initial": "False",
+    "show_plots_final": "True", "random_seed": 42, "shrink_img": 1.0,
+}
+
+stain_defaults = {
+    "dark_thresh": 120, "sat_thresh": 60, "diff_thresh": 25,
+}
 
 # ---------- Helpers ---------- #
 def save_all_open_figures(prefix="plot"):
@@ -33,706 +57,855 @@ def save_all_open_figures(prefix="plot"):
     plt.close("all")
     return urls
 
+def cut_polygons_from_image_bytes(image_bytes: bytes, polygons, background=None, export_alpha=True, crop_to_poly=False):
+    """
+    Processes the image with polygon masking, background replacement, and optional cropping.
+    """
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Failed to decode image")
+    
+    h, w = img.shape[:2]
+    
+    # 1. Prepare Masks & Points
+    mask = np.zeros((h, w), dtype=np.uint8)
+    pts_list = []
+    all_points = []
+    
+    for poly in polygons:
+        if len(poly) >= 3:
+            pts = np.array(poly, np.int32).reshape((-1, 1, 2))
+            pts_list.append(pts)
+            all_points.append(pts)
+    
+    if pts_list:
+        cv2.fillPoly(mask, pts_list, 255)
 
-color_defaults = {
-    "k": 5, "L_thresh": 30.0, "C_thresh": 0.1, "ab_step": 1.0, "point_size": 12,
-    "size_mode": "sqrt", "top_n_chroma": "", "top_n_achro": "",
-    "pie_show_labels": "True", "show_input": "True", "show_plots_initial": "False",
-    "show_plots_final": "True", "random_seed": 42, "shrink_img": 0.1,
-}
+    # 2. CROP LOGIC
+    if crop_to_poly and all_points:
+        combined_pts = np.concatenate(all_points)
+        x, y, w_rect, h_rect = cv2.boundingRect(combined_pts)
+        
+        padding = 10
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w_rect = min(w - x, w_rect + 2*padding)
+        h_rect = min(h - y, h_rect + 2*padding)
+        
+        img = img[y:y+h_rect, x:x+w_rect]
+        mask = mask[y:y+h_rect, x:x+w_rect]
+    
+    # 3. Prepare Background
+    if background is None:
+        background = (255, 255, 255) # White default (BGR)
+    
+    bg_img = np.zeros_like(img)
+    bg_img[:] = background
+    
+    # 4. Combine
+    mask_bool = mask.astype(bool)
+    combined_img = bg_img.copy()
+    combined_img[mask_bool] = img[mask_bool]
+    
+    # 5. Handle Export
+    if export_alpha:
+        b, g, r = cv2.split(combined_img)
+        alpha = mask.copy()
+        out = cv2.merge((b, g, r, alpha))
+    else:
+        out = combined_img
+    
+    is_success, buffer = cv2.imencode(".png", out)
+    return buffer.tobytes(), "image/png"
 
-stain_defaults = {
-    "dark_thresh": 120,
-    "sat_thresh": 60,
-    "diff_thresh": 25,
-}
 
-
-def maya_theme_style():
+def modern_style():
+    """Returns the CSS for the modern DARK MODE UI."""
     return """
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            /* Dark Mode Palette (Zinc) */
+            --bg-body: #09090b;       /* Zinc 950 */
+            --bg-panel: #18181b;      /* Zinc 900 */
+            --bg-element: #27272a;    /* Zinc 800 */
+            
+            --text-main: #f4f4f5;     /* Zinc 100 */
+            --text-sub: #a1a1aa;      /* Zinc 400 */
+            
+            --border: #3f3f46;        /* Zinc 700 */
+            
+            --primary: #0d9488;       /* Teal 600 */
+            --primary-hover: #0f766e; /* Teal 700 */
+            --accent: #ea580c;        /* Orange 600 */
+            
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+            
+            --radius: 0.5rem;
+        }
+
         body {
-            font-family: 'Poppins', 'Segoe UI', sans-serif;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
             margin: 0;
-            background: linear-gradient(180deg,#fdf7ec 0%, #fdf3e6 100%);
-            color: #2c2b2b;
-        }
-
-        header {
-            position: relative;
-            background: linear-gradient(90deg,#c1440e,#d98e32,#14957a);
-            color: #fff;
-            text-align: center;
-            padding: 25px 15px;
-            border-bottom: 6px solid #a1250d;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-        }
-
-        header h1 {
-            margin: 0;
-            font-size: 2em;
-            letter-spacing: 0.05em;
-            text-shadow: 1px 2px 3px rgba(0,0,0,0.4);
-        }
-
-        .dog {
-            position: absolute;
-            top: 5px;
-            right: 25px;
-            width: 85px;
-            height: 85px;
-            background: url('https://media.tenor.com/8ZOBp0fZcMsAAAAi/dog-wag.gif') center/contain no-repeat;
-        }
-
-        nav {
-            background: #f9edda;
-            padding: 12px;
-            text-align: center;
-            border-bottom: 2px solid #c1440e;
-        }
-
-        nav a {
-            color: #14957a;
-            text-decoration: none;
-            padding: 8px 16px;
-            margin: 0 8px;
-            border-radius: 8px;
-            font-weight: bold;
-            transition: 0.3s;
-            display: inline-block;
-        }
-
-        nav a:hover {
-            background: #14957a;
-            color: white;
-        }
-
-        main {
-            display: flex;
-            justify-content: space-between;
-            gap: 20px;
-            padding: 25px;
-        }
-
-        .full-width {
-            width: 100%;
-        }
-
-        .panel {
-            background-color: #fff6e8;
-            border-radius: 15px;
-            border: 2px solid #c1440e;
-            padding: 20px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-
-        .analysis {
-            width: 63%;
-            background: #fff9f1;
-        }
-
-        .sidebar {
-            width: 32%;
-            background: #f9f1e7;
-            overflow-y: auto;
-            max-height: 85vh;
-        }
-
-        .landing-options {
-            display: flex;
-            justify-content: center;
-            gap: 40px;
-            margin-top: 40px;
-        }
-
-        .option-card {
-            background: white;
-            border: 3px solid #14957a;
-            border-radius: 15px;
-            padding: 30px;
-            width: 300px;
-            text-align: center;
-            cursor: pointer;
-            transition: 0.3s;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-
-        .option-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-            border-color: #c1440e;
-        }
-
-        .option-card h2 {
-            color: #c1440e;
-            margin-bottom: 15px;
-        }
-
-        .option-card p {
-            color: #555;
+            padding: 0;
             line-height: 1.6;
         }
 
-        img {
-            border-radius: 8px;
-            border: 2px solid #14957a;
-            margin: 8px;
-            max-width: 100%;
+        /* Header */
+        header {
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: var(--shadow-sm);
         }
-
-        label {
-            display: inline-block;
-            margin-top: 6px;
-            color: #3e3d3d;
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        header h1 span { color: var(--primary); }
+        
+        /* Nav */
+        nav {
+            background: var(--bg-panel);
+            padding: 0.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        nav a {
+            color: var(--text-sub);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
             font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        nav a:hover {
+            background-color: var(--bg-element);
+            color: var(--text-main);
         }
 
-        input[type=submit], button {
-            background: linear-gradient(45deg,#14957a,#d98e32);
-            color: white;
+        /* Layout */
+        main {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 2rem;
+            align-items: start;
+        }
+        main.full-width {
+            grid-template-columns: 1fr;
+            max-width: 1000px;
+        }
+
+        /* Panels */
+        .panel {
+            background: var(--bg-panel);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        /* Sidebar Inputs */
+        label {
+            display: block;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+            color: var(--text-sub);
+            margin-bottom: 0.4rem;
+            margin-top: 1.2rem;
+        }
+        label:first-of-type { margin-top: 0; }
+
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 0.6rem;
+            background-color: var(--bg-body);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-radius: 0.375rem;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        input[type="text"]:focus, input[type="number"]:focus, select:focus {
+            outline: 2px solid var(--primary);
+            border-color: transparent;
+        }
+        input[type="file"] {
+            font-size: 0.875rem;
+            color: var(--text-sub);
+            margin-top: 0.25rem;
+        }
+
+        /* Buttons */
+        .btn, input[type="submit"], button {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            padding: 0.6rem 1.2rem;
             border: none;
-            padding: 8px 14px;
-            border-radius: 8px;
-            margin-top: 8px;
+            border-radius: 0.375rem;
+            background-color: var(--primary);
+            color: white;
+            font-weight: 600;
+            font-size: 0.9rem;
             cursor: pointer;
-            font-weight: bold;
-            transition: 0.3s;
+            transition: background-color 0.2s, transform 0.1s;
+            text-decoration: none;
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 1rem;
         }
-
-        input[type=submit]:hover, button:hover {
-            opacity: 0.9;
-            transform: scale(1.04);
+        .btn:hover, input[type="submit"]:hover, button:hover {
+            background-color: var(--primary-hover);
         }
-
-        select, input, textarea {
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            padding: 5px;
-            margin-bottom: 10px;
-            width: 95%;
+        .btn-secondary {
+            background-color: var(--bg-element);
+            color: var(--text-main);
+            border: 1px solid var(--border);
         }
-
-        .advanced {
-            margin-top: 10px;
-            background: #e1f2e6;
-            border: 1px solid #14957a;
-            padding: 10px;
-            border-radius: 10px;
+        .btn-secondary:hover {
+            background-color: var(--border);
         }
-
-        .info-box {
-            background: #fff9e6;
-            border-left: 4px solid #d98e32;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 5px;
+        .btn-danger {
+            background-color: #7f1d1d; /* Dark red */
+            color: #fecaca;
         }
+        .btn-danger:hover { background-color: #991b1b; }
 
-        .instruction-box {
-            background: #e8f4f8;
-            border: 2px solid #14957a;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 8px;
+        /* Toolbars (Horizontal) */
+        .toolbar {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
         }
-
-        .instruction-box h4 {
+        .toolbar .btn {
+            width: auto;
             margin-top: 0;
-            color: #14957a;
+            font-size: 0.8rem;
+            padding: 0.4rem 0.8rem;
         }
 
-        .instruction-box ol {
-            margin: 10px 0;
-            padding-left: 20px;
+        /* Swatches Grid */
+        .swatch-container { 
+            display: grid; 
+            grid-template-columns: repeat(6, 1fr); 
+            gap: 6px; 
+            margin-top: 0.5rem; 
+        }
+        .swatch {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 2px solid var(--border);
+            transition: transform 0.1s;
+        }
+        .swatch:hover { transform: scale(1.1); z-index:2; border-color:white; }
+        .swatch.active {
+            border-color: white;
+            box-shadow: 0 0 0 2px var(--primary);
+            transform: scale(1.1);
+            z-index:2;
         }
 
-        .instruction-box li {
-            margin: 8px 0;
-            line-height: 1.5;
+        /* Canvas */
+        #canvas-container {
+            width: 100%;
+            height: 65vh;
+            background-color: #000000;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            position: relative;
+            cursor: crosshair;
+        }
+        
+        /* Info Boxes */
+        .info-box {
+            background-color: rgba(13, 148, 136, 0.1); /* Teal tint */
+            border-left: 3px solid var(--primary);
+            padding: 1rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            color: #ccfbf1; /* Teal 100 */
+            margin: 1rem 0;
+        }
+        .info-box strong { color: white; }
+        .info-box a { color: var(--primary); }
+        
+        /* Landing Page Grid */
+        .landing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
         }
 
+        /* Gallery & Lightbox */
+        /* Small gallery items for cluster inspections */
+        .gallery-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); 
+            gap: 10px; 
+            margin-top: 15px; 
+        }
+        .gallery-item { 
+            position: relative; 
+            cursor: pointer; 
+            border: 1px solid var(--border); 
+            border-radius: 4px; 
+            overflow: hidden; 
+            transition: all 0.2s; 
+            background: var(--bg-element); 
+        }
+        .gallery-item:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+        .gallery-item img { width: 100%; height: 100px; object-fit: cover; display: block; }
+        .gallery-item span { 
+            position: absolute; 
+            bottom: 0; left: 0; right: 0; 
+            background: rgba(0,0,0,0.7); 
+            color: white; 
+            font-size: 0.7rem; 
+            padding: 2px 5px; 
+            text-align: center;
+        }
+        
+        /* Large Primary Plot Items */
+        .gallery-item-large {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #000; /* Plots are on black background */
+        }
+        .gallery-item-large:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .gallery-item-large img {
+            width: 100%;
+            height: auto; 
+            max-height: 400px; /* Max size for core plots */
+            object-fit: contain;
+            display: block;
+        }
+        .gallery-item-large span {
+            position: absolute;
+            top: 0; left: 0; 
+            background: rgba(0,0,0,0.8);
+            color: var(--text-main);
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-bottom-right-radius: 4px;
+        }
+
+
+        #lightbox { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); z-index: 9999; display: flex; justify-content: center; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.2s; }
+        #lightbox.active { visibility: visible; opacity: 1; }
+        #lightbox-canvas { max-width: 95%; max-height: 95%; cursor: grab; }
+        #lightbox-canvas:active { cursor: grabbing; }
+        #lightbox-close { position: absolute; top: 20px; right: 30px; color: white; font-size: 2rem; cursor: pointer; z-index: 10000; }
+        #lightbox-info { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); color: #aaa; font-size: 0.9rem; pointer-events: none; }
+        
+        /* Utilities */
+        .hidden { display: none; }
+        hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
         footer {
             text-align: center;
-            color: #333;
-            font-weight: 500;
-            padding: 15px;
-            background: #f9edda;
-            border-top: 3px solid #c1440e;
+            padding: 2rem;
+            color: var(--text-sub);
+            font-size: 0.8rem;
+            margin-top: auto;
+            border-top: 1px solid var(--border);
         }
-
-        h3,h4 { color: #a1250d; }
     </style>
-
     <script>
-        function toggleAdvanced(){
-          var adv=document.getElementById('adv');
-          adv.style.display=(adv.style.display==='none' ? 'block' : 'none');
+        let lb_img = new Image();
+        let lb_scale = 1, lb_originX = 0, lb_originY = 0;
+        let lb_isPanning = false, lb_startX = 0, lb_startY = 0;
+        
+        function openLightbox(url) {
+            const lb = document.getElementById('lightbox');
+            const cvs = document.getElementById('lightbox-canvas');
+            const ctx = cvs.getContext('2d');
+            
+            lb.classList.add('active');
+            lb_img.src = url;
+            lb_img.onload = () => {
+                cvs.width = window.innerWidth;
+                cvs.height = window.innerHeight;
+                // Fit image
+                lb_scale = Math.min((cvs.width-100)/lb_img.width, (cvs.height-100)/lb_img.height);
+                lb_originX = (cvs.width - lb_img.width * lb_scale) / 2;
+                lb_originY = (cvs.height - lb_img.height * lb_scale) / 2;
+                drawLightbox();
+            }
+            
+            // Event Listeners for Zoom/Pan
+            cvs.onwheel = (e) => {
+                e.preventDefault();
+                const rect = cvs.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                const worldX = (mx - lb_originX) / lb_scale;
+                const worldY = (my - lb_originY) / lb_scale;
+                
+                const factor = e.deltaY < 0 ? 1.1 : 0.9;
+                lb_scale *= factor;
+                
+                lb_originX = mx - worldX * lb_scale;
+                lb_originY = my - worldY * lb_scale;
+                drawLightbox();
+            };
+            
+            cvs.onmousedown = (e) => {
+                lb_isPanning = true;
+                lb_startX = e.clientX - lb_originX;
+                lb_startY = e.clientY - lb_originY;
+                cvs.style.cursor = 'grabbing';
+            };
+            window.onmouseup = () => { lb_isPanning = false; document.getElementById('lightbox-canvas').style.cursor = 'grab'; };
+            cvs.onmousemove = (e) => {
+                if(!lb_isPanning) return;
+                lb_originX = e.clientX - lb_startX;
+                lb_originY = e.clientY - lb_startY;
+                drawLightbox();
+            };
+            cvs.oncontextmenu = e => e.preventDefault();
+            
+            // ESC key to close
+            document.onkeydown = (e) => {
+                if (e.key === 'Escape' && lb.classList.contains('active')) {
+                    closeLightbox();
+                }
+            };
+        }
+        
+        function drawLightbox() {
+            const cvs = document.getElementById('lightbox-canvas');
+            const ctx = cvs.getContext('2d');
+            ctx.clearRect(0,0,cvs.width, cvs.height);
+            ctx.save();
+            ctx.translate(lb_originX, lb_originY);
+            ctx.scale(lb_scale, lb_scale);
+            ctx.drawImage(lb_img, 0, 0);
+            ctx.restore();
+        }
+        
+        function closeLightbox() {
+            document.getElementById('lightbox').classList.remove('active');
+            window.onmouseup = null;
+            document.onkeydown = null; 
         }
     </script>
     """
 
-
-def color_form_html(params):
-    p = params
-    return f"""
-    <form action="/color_analyze" enctype="multipart/form-data" method="post">
-        <label>Upload Image</label><br>
-        <input type="file" name="ref_image" accept="image/*" required><br><br>
-
-        <label>Number of Colors (k):</label><br>
-        <input type="number" name="k" value="{p['k']}" min="1" required><br><br>
-
-        <button type="button" onclick="toggleAdvanced()">Show/Hide Advanced ⚙️</button>
-        <div id="adv" class="advanced" style="display:none;">
-          <label>L_thresh:</label><input type="number" step="0.1" name="L_thresh" value="{p['L_thresh']}"><br>
-          <label>C_thresh:</label><input type="number" step="0.01" name="C_thresh" value="{p['C_thresh']}"><br>
-          <label>ab_step:</label><input type="number" step="0.1" name="ab_step" value="{p['ab_step']}"><br>
-          <label>point_size:</label><input type="number" name="point_size" value="{p['point_size']}"><br>
-          <label>size_mode:</label>
-          <select name="size_mode">
-             <option {"selected" if p["size_mode"]=="sqrt" else ""}>sqrt</option>
-             <option {"selected" if p["size_mode"]=="linear" else ""}>linear</option>
-          </select><br>
-          <label>top_n_chroma:</label><input type="text" name="top_n_chroma" value="{p['top_n_chroma']}"><br>
-          <label>top_n_achro:</label><input type="text" name="top_n_achro" value="{p['top_n_achro']}"><br>
-          <label>pie_show_labels:</label>
-          <select name="pie_show_labels"><option>True</option><option {"selected" if p["pie_show_labels"]=="False" else ""}>False</option></select><br>
-          <label>show_input:</label>
-          <select name="show_input"><option>True</option><option {"selected" if p["show_input"]=="False" else ""}>False</option></select><br>
-          <label>show_plots_initial:</label>
-          <select name="show_plots_initial"><option>False</option><option {"selected" if p["show_plots_initial"]=="True" else ""}>True</option></select><br>
-          <label>show_plots_final:</label>
-          <select name="show_plots_final"><option>True</option><option {"selected" if p["show_plots_final"]=="False" else ""}>False</option></select><br>
-          <label>random_seed:</label><input type="number" name="random_seed" value="{p['random_seed']}"><br>
-          <label>shrink_img:</label><input type="number" step="0.01" name="shrink_img" value="{p['shrink_img']}"><br>
-        </div>
-        <br>
-        <input type="submit" value="Run Analysis">
-        <button formaction="/color_restore_defaults" formmethod="post">Restore Defaults</button>
-    </form>
-    """
-
-
-def stain_form_html(params):
-    p = params
-    return f"""
-    <form action="/stain_analyze" enctype="multipart/form-data" method="post">
-        <div class="instruction-box">
-            <h4>📍 ROI Point Selection Instructions</h4>
-            <p><strong>When the image windows appear, you will select 4 points to define the Region of Interest (ROI):</strong></p>
-            <ol>
-                <li><strong>Top-Left corner</strong> – Click the upper-left point of your analysis area</li>
-                <li><strong>Top-Right corner</strong> – Click the upper-right point</li>
-                <li><strong>Bottom-Right corner</strong> – Click the lower-right point</li>
-                <li><strong>Bottom-Left corner</strong> – Click the lower-left point</li>
-            </ol>
-            <p>⚠️ <strong>Important:</strong> Follow this clockwise order starting from top-left. The points define a quadrilateral that will be perspective-corrected for analysis.</p>
-            <p>🖱️ <strong>Tip:</strong> Click carefully on each corner. Red circles will appear as you click to confirm your selection.</p>
-        </div>
-
-        <label><strong>Upload "Before" Image (Reference)</strong></label><br>
-        <input type="file" name="image_before" accept="image/*" required><br><br>
-
-        <label><strong>Upload "After" Image (Target)</strong></label><br>
-        <input type="file" name="image_after" accept="image/*" required><br><br>
-
-        <button type="button" onclick="toggleAdvanced()">Show/Hide Advanced Parameters ⚙️</button>
-        <div id="adv" class="advanced" style="display:none;">
-          <label>Dark Threshold (0-255):</label>
-          <input type="number" name="dark_thresh" value="{p['dark_thresh']}" min="0" max="255"><br>
-          <small>Lower values detect lighter stains, higher values only very dark stains. Default: 120</small><br><br>
-
-          <label>Saturation Threshold (0-255):</label>
-          <input type="number" name="sat_thresh" value="{p['sat_thresh']}" min="0" max="255"><br>
-          <small>Filters colored spots. Lower values = more strict (only grayscale). Default: 60</small><br><br>
-
-          <label>Difference Threshold (0-255):</label>
-          <input type="number" name="diff_thresh" value="{p['diff_thresh']}" min="0" max="255"><br>
-          <small>Minimum brightness difference to count as stain. Higher = fewer detections. Default: 25</small><br><br>
-        </div>
-        <br>
-        <input type="submit" value="Run Stain Detection">
-        <button formaction="/stain_restore_defaults" formmethod="post">Restore Defaults</button>
-    </form>
-    """
-
-
 def page_layout(main, sidebar=None, show_nav=True):
-    nav_html = """
-    <nav>
-        <a href="/">🏠 Home</a>
-        <a href="/color_analysis">🎨 Color Analysis</a>
-        <a href="/stain_detection">🔍 Stain Detection</a>
-    </nav>
-    """ if show_nav else ""
-    
-    if sidebar:
-        content = f"""
-        <main>
-            <div class="panel analysis">{main}</div>
-            <div class="panel sidebar">{sidebar}</div>
-        </main>
-        """
-    else:
-        content = f"""
-        <main>
-            <div class="panel full-width">{main}</div>
-        </main>
-        """
+    nav_html = """<nav><a href="/">🏠 Home</a><a href="/polygon_cutter">✂️ Polygon Cutter</a><a href="/color_analysis">🎨 Color Analysis</a><a href="/stain_detection">🔍 Stain Detection</a></nav>""" if show_nav else ""
+    content = f"""<main><div class="panel sidebar">{sidebar}</div><div class="panel analysis">{main}</div></main>""" if sidebar else f"""<main class="full-width"><div class="panel">{main}</div></main>"""
     
     return f"""
-    <html><head>{maya_theme_style()}</head>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Archaeological Analysis</title>
+        {modern_style()}
+    </head>
     <body>
-      <header>
-        <h1>🏺 Archaeological Image Analysis Suite</h1>
-        <div class="dog"></div>
-      </header>
-      {nav_html}
-      {content}
-      <footer>Inspired by Totonaco & Maya heritage · El Tajín, Veracruz · Crafted with 🧡</footer>
-    </body></html>
+        <header><h1><span>🏺</span> Archaeological Analysis</h1></header>
+        {nav_html}
+        {content}
+        <div id="lightbox">
+            <div id="lightbox-close" onclick="closeLightbox()">&times;</div>
+            <canvas id="lightbox-canvas"></canvas>
+            <div id="lightbox-info">Scroll to Zoom • Drag to Pan • ESC to Close</div>
+        </div>
+        <footer>Built for El Tajín, Veracruz</footer>
+    </body>
+    </html>
     """
-
 
 # ---------- Routes ---------- #
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
     main = """
-    <h2 style="text-align: center; color: #14957a;">Welcome to the Archaeological Image Analysis Suite</h2>
-    <p style="text-align: center; max-width: 700px; margin: 20px auto; line-height: 1.8;">
-        This tool was developed for archaeological research at <strong>El Tajín, Veracruz, Mexico</strong>, 
-        focusing on the analysis and documentation of surface conditions on historical artifacts and structures.
-        Choose an analysis method below:
-    </p>
-    
-    <div class="landing-options">
-        <a href="/color_analysis" style="text-decoration: none;">
-            <div class="option-card">
-                <h2>🎨 Color Analysis</h2>
-                <p><strong>FLACA</strong> – Fast Lightweight Automated Color Analyzer</p>
-                <p>Automatically cluster and analyze colors in archaeological photographs using k-means clustering in Lab color space.</p>
-                <p style="margin-top: 15px; font-size: 0.9em; color: #14957a;"><strong>→ Start Color Analysis</strong></p>
-            </div>
-        </a>
-        
-        <a href="/stain_detection" style="text-decoration: none;">
-            <div class="option-card">
-                <h2>🔍 Stain Detection</h2>
-                <p>Compare before/after images to detect and quantify surface stains and discolorations.</p>
-                <p>Specially optimized for dark stains on archaeological surfaces.</p>
-                <p style="margin-top: 15px; font-size: 0.9em; color: #14957a;"><strong>→ Start Stain Detection</strong></p>
-            </div>
-        </a>
+    <div style="text-align:center; max-width:700px; margin:0 auto;">
+        <h2 style="font-size:2rem; color:var(--text-main); margin-bottom:0.5rem;">Select a Tool</h2>
+        <p style="color:var(--text-sub);">Advanced digital tools for archaeological conservation and surface analysis.</p>
     </div>
     
-    <div class="info-box" style="max-width: 800px; margin: 40px auto;">
-        <h4>ℹ️ About This Tool</h4>
-        <p>This open-source prototypical software is designed for exploratory and educational purposes in archaeological conservation. 
-        For formal scientific analysis or publication, please verify results with qualified conservation or imaging professionals.</p>
+    <div class="landing-grid">
+        <a href="/polygon_cutter" style="background:var(--bg-panel); border-radius:var(--radius); padding:2rem; text-align:center; border:1px solid var(--border); text-decoration:none; color:inherit; display:block;">
+            <div style="font-size:3rem; margin-bottom:1rem;">✂️</div><h2>Polygon Cutter</h2><p style="color:var(--text-sub)">Mask artifacts & remove backgrounds.</p>
+        </a>
+        <a href="/color_analysis" style="background:var(--bg-panel); border-radius:var(--radius); padding:2rem; text-align:center; border:1px solid var(--border); text-decoration:none; color:inherit; display:block;">
+            <div style="font-size:3rem; margin-bottom:1rem;">🎨</div><h2>Color Analysis</h2><p style="color:var(--text-sub)">Automated clustering (FLACA).</p>
+        </a>
+        <a href="/stain_detection" style="background:var(--bg-panel); border-radius:var(--radius); padding:2rem; text-align:center; border:1px solid var(--border); text-decoration:none; color:inherit; display:block;">
+            <div style="font-size:3rem; margin-bottom:1rem;">🔍</div><h2>Stain Detection</h2><p style="color:var(--text-sub)">Quantify degradation.</p>
+        </a>
     </div>
     """
-    return page_layout(main, sidebar=None, show_nav=False)
+    return page_layout(main, sidebar=None, show_nav=True)
+
+# ========== POLYGON CUTTER ROUTES ========== #
+
+@app.get("/polygon_cutter", response_class=HTMLResponse)
+async def polygon_cutter_page():
+    colors = [
+        ("255,255,255","#FFF"), ("0,0,0","#000"), ("128,128,128","#808080"), ("255,0,0","#F00"), ("0,255,0","#0F0"), ("0,0,255","#00F"),
+        ("255,255,0","#FF0"), ("0,255,255","#0FF"), ("255,0,255","#F0F"), ("255,165,0","#FFA500"), ("128,0,128","#800080"), ("0,128,0","#008000"),
+        ("255,192,203","#FFC0CB"), ("0,128,128","#008080"), ("165,42,42","#A52A2A"), ("245,245,220","#F5F5DC"), ("128,0,0","#800000"), ("0,0,128","#000080"),
+        ("255,215,0","#FFD700"), ("192,192,192","#C0C0C0"), ("75,0,130","#4B0082"), ("250,128,114","#FA8072"), ("64,224,208","#40E0D0"), ("107,142,35","#6B8E23")
+    ]
+    swatches = "".join([f'<div class="swatch {"active" if i==0 else ""}" data-color="{c[0]}" style="background:{c[1]}"></div>' for i, c in enumerate(colors)])
+    
+    sidebar = f"""
+    <h3>Control Panel</h3>
+    <label>1. Upload Image</label><input id="file" type="file" accept="image/*">
+    <label>2. Background Fill</label><div class="swatch-container">{swatches}</div>
+    <label>3. Settings</label><div style="background:var(--bg-element); padding:8px; margin-top:5px;"><input type="checkbox" id="cropCheckbox" style="margin:0;"> <span style="font-size:0.85rem;">Crop to Selection</span></div>
+    <hr>
+    <button id="analyze_color" class="btn">🎨 Analyze Colors</button>
+    <button id="export_alpha" class="btn btn-secondary">⬇️ Transparent PNG</button>
+    <button id="export_flat" class="btn btn-secondary">⬇️ Flat PNG</button>
+    <div class="info-box" style="margin-top:2rem;"><strong>Hotkeys:</strong> C=Complete, Z=Undo, Wheel=Zoom</div>
+    """
+    main = """
+    <div class="toolbar">
+        <button id="complete" class="btn" style="width:auto">Complete (C)</button>
+        <button id="newpoly" class="btn btn-secondary" style="width:auto">New (N)</button>
+        <button id="undo" class="btn btn-secondary" style="width:auto">Undo (Z)</button>
+        <button id="clearall" class="btn btn-danger" style="margin-left:auto; width:auto;">Clear</button>
+    </div>
+    <div id="canvas-container"><canvas id="canvas"></canvas></div>
+    <div style="margin-top:5px; font-size:0.8rem; color:var(--text-sub); display:flex; justify-content:space-between;">
+        <span id="statusText">Load image to start</span><span id="zoomText">Zoom: 100%</span>
+    </div>
+    <script>
+    let container=document.getElementById('canvas-container'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
+    let img=new Image(), polygons=[], current=[], scale=1, originX=0, originY=0, isPanning=false, startPanX=0, startPanY=0, selectedBg="255,255,255", imgBytes=null;
+    document.querySelectorAll('.swatch').forEach(s=>{s.onclick=()=>{document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('active'));s.classList.add('active');selectedBg=s.dataset.color;}});
+    function resizeCanvas(){canvas.width=container.clientWidth;canvas.height=container.clientHeight;draw();}
+    window.onresize=resizeCanvas; resizeCanvas();
+    document.getElementById('file').onchange=async(ev)=>{const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=(e)=>{img.src=e.target.result;img.onload=()=>{scale=Math.min((canvas.width-40)/img.width,(canvas.height-40)/img.height);originX=(canvas.width-img.width*scale)/2;originY=(canvas.height-img.height*scale)/2;draw();document.getElementById('statusText').innerText="Active";}};imgBytes=await f.arrayBuffer();r.readAsDataURL(f);};
+    function toWorld(sx,sy){return{x:(sx-originX)/scale,y:(sy-originY)/scale};}
+    container.onwheel=(e)=>{e.preventDefault();const r=canvas.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,ws=toWorld(mx,my),zf=e.deltaY<0?1.1:0.9;scale*=zf;originX=mx-ws.x*scale;originY=my-ws.y*scale;draw();}
+    container.onmousedown=(e)=>{if(e.button===1||e.button===2){isPanning=true;startPanX=e.clientX-originX;startPanY=e.clientY-originY;container.style.cursor='grabbing';e.preventDefault();}};
+    window.onmouseup=()=>{isPanning=false;container.style.cursor='crosshair';};
+    container.onmousemove=(e)=>{if(isPanning){originX=e.clientX-startPanX;originY=e.clientY-startPanY;draw();}};
+    container.oncontextmenu=e=>e.preventDefault();
+    container.onclick=(ev)=>{if(isPanning||!img.src)return;const r=canvas.getBoundingClientRect(),pt=toWorld(ev.clientX-r.left,ev.clientY-r.top);current.push([pt.x,pt.y]);draw();};
+    document.getElementById('complete').onclick=()=>{if(current.length>=3){polygons.push(current.slice());current=[];draw();}else alert('3+ points needed');};
+    document.getElementById('newpoly').onclick=()=>{current=[];draw();};
+    document.getElementById('undo').onclick=()=>{current.pop();draw();};
+    document.getElementById('clearall').onclick=()=>{polygons=[];current=[];draw();};
+    document.onkeydown=(e)=>{if(e.key==='c'||e.key==='Enter')document.getElementById('complete').click();if(e.key==='z')document.getElementById('undo').click();};
+    function draw(){
+        ctx.clearRect(0,0,canvas.width,canvas.height);document.getElementById('zoomText').innerText=`Zoom: ${(scale*100).toFixed(0)}%`;
+        if(!img.src){ctx.fillStyle='#555';ctx.textAlign='center';ctx.fillText("Upload Image",canvas.width/2,canvas.height/2);return;}
+        ctx.save();ctx.translate(originX,originY);ctx.scale(scale,scale);ctx.drawImage(img,0,0);
+        const lw=2/scale,rad=3/scale;
+        for(let p of polygons){if(p.length<2)continue;ctx.beginPath();ctx.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0],p[i][1]);ctx.closePath();ctx.fillStyle='rgba(13,148,136,0.3)';ctx.fill();ctx.strokeStyle='#0d9488';ctx.lineWidth=lw;ctx.stroke();}
+        if(current.length>0){ctx.beginPath();ctx.moveTo(current[0][0],current[0][1]);for(let i=1;i<current.length;i++)ctx.lineTo(current[i][0],current[i][1]);ctx.strokeStyle='#ea580c';ctx.lineWidth=lw;ctx.stroke();for(let p of current){ctx.beginPath();ctx.arc(p[0],p[1],rad,0,Math.PI*2);ctx.fillStyle='#ea580c';ctx.fill();}}
+        ctx.restore();
+    }
+    async function processImage(mode){
+        if(!imgBytes){alert('Upload image');return;}
+        const crop=document.getElementById('cropCheckbox').checked;
+        const form=new FormData(); form.append('image',new Blob([imgBytes]),'img.png');
+        form.append('meta',JSON.stringify({polygons:polygons.concat(current.length>=3?[current]:[]),background:selectedBg,alpha:mode==='alpha',crop:crop}));
+        const btn=document.getElementById(mode==='analyze'?'analyze_color':'export_'+mode); btn.innerText="Working..."; btn.disabled=true;
+        try{
+            if(mode==='analyze'){
+                const r=await fetch('/api/process_cut_and_store',{method:'POST',body:form});
+                if(r.ok) window.location.href=`/color_analysis?preprocessed=${(await r.json()).filename}`;
+            }else{
+                const r=await fetch('/api/process_cut_download',{method:'POST',body:form});
+                if(!r.ok) throw new Error('Fail');
+                const u=URL.createObjectURL(await r.blob()); const a=document.createElement('a'); a.href=u; a.download=`cut_${mode}.png`; a.click();
+            }
+        }catch(e){alert(e);}finally{btn.innerText=mode==='analyze'?'🎨 Analyze Colors':(mode==='alpha'?'⬇️ Transparent PNG':'⬇️ Flat PNG'); btn.disabled=false;}
+    }
+    document.getElementById('export_alpha').onclick=()=>processImage('alpha');
+    document.getElementById('export_flat').onclick=()=>processImage('flat');
+    document.getElementById('analyze_color').onclick=()=>processImage('analyze');
+    </script>
+    """
+    return page_layout(main, sidebar)
+
+
+@app.post("/api/process_cut_download")
+async def process_cut_download(image: UploadFile = File(...), meta: str = Form(...)):
+    m = json.loads(meta); alpha = m.get("alpha", True); crop = m.get("crop", False)
+    try: r,g,b = [int(x) for x in m.get("background","255,255,255").split(",")]; bg=(b,g,r)
+    except: bg=(255,255,255)
+    b_out, mime = cut_polygons_from_image_bytes(await image.read(), m.get("polygons",[]), background=bg, export_alpha=alpha, crop_to_poly=crop)
+    return StreamingResponse(io.BytesIO(b_out), media_type=mime)
+
+@app.post("/api/process_cut_and_store")
+async def process_cut_and_store(image: UploadFile = File(...), meta: str = Form(...)):
+    m = json.loads(meta); crop = m.get("crop", False)
+    try: r,g,b = [int(x) for x in m.get("background","255,255,255").split(",")]; bg=(b,g,r)
+    except: bg=(255,255,255)
+    b_out, _ = cut_polygons_from_image_bytes(await image.read(), m.get("polygons",[]), background=bg, export_alpha=True, crop_to_poly=crop)
+    fname = f"cut_{uuid.uuid4().hex}.png"; 
+    with open(os.path.join(TEMP_DIR, fname), "wb") as f: f.write(b_out)
+    return JSONResponse({"filename": fname})
 
 
 # ========== COLOR ANALYSIS ROUTES ========== #
 
 @app.get("/color_analysis", response_class=HTMLResponse)
-async def color_analysis_page():
-    main = "<h3>🎨 FLACA – Color Analysis</h3>" + color_form_html(color_defaults)
-    return page_layout(main, "<i>No visualizations yet. Upload an image to start.</i>")
+async def color_analysis_page(preprocessed: str = None):
+    return page_layout("""<div class="info-box"><h4>🎨 FLACA</h4><p>Upload image to start.</p></div>""", sidebar=color_form(color_defaults, preprocessed_file=preprocessed))
 
+def color_form(p, preprocessed_file=None, reuse_path=None):
+    if preprocessed_file: inp = f'<div class="info-box">✅ Ready: {preprocessed_file}<input type="hidden" name="preprocessed_file" value="{preprocessed_file}"><a href="/color_analysis" style="color:#f87171">Cancel</a></div>'
+    elif reuse_path: inp = f'<div class="info-box">🔄 Re-using Image<input type="hidden" name="reuse_path" value="{reuse_path}"><div style="margin-top:5px; border-top:1px solid #444"><label>Or New:</label><input type="file" name="ref_image"></div></div>'
+    else: inp = '<label>Upload Image</label><input type="file" name="ref_image" required>'
+    return f"""
+    <h3>Settings</h3>
+    <form action="/color_analyze" enctype="multipart/form-data" method="post">
+        {inp}
+        <label>K (Colors)</label><input type="number" name="k" value="{p['k']}" min="1">
+        <button type="button" onclick="toggleAdv()" class="btn btn-secondary" style="font-size:0.8rem">Advanced ⚙️</button>
+        <div id="adv" class="hidden" style="margin-top:10px; padding:10px; border:1px solid var(--border);">
+          <label>L_thresh</label><input type="number" step="0.1" name="L_thresh" value="{p['L_thresh']}">
+          <label>C_thresh</label><input type="number" step="0.01" name="C_thresh" value="{p['C_thresh']}">
+          <label>ab_step</label><input type="number" step="0.1" name="ab_step" value="{p['ab_step']}">
+          <label>point_size</label><input type="number" name="point_size" value="{p['point_size']}">
+          <label>shrink_img</label><input type="number" step="0.01" name="shrink_img" value="{p['shrink_img']}">
+          <label>Show Plots</label><select name="show_plots_final"><option value="True">Yes</option><option value="False">No</option></select>
+        </div>
+        <input type="submit" value="Run Analysis">
+        <button formaction="/color_restore_defaults" formmethod="post" class="btn btn-secondary">Reset</button>
+    </form>
+    <script>function toggleAdv(){{ document.getElementById('adv').classList.toggle('hidden'); }}</script>
+    """
 
 @app.post("/color_restore_defaults", response_class=HTMLResponse)
-async def color_restore_defaults():
-    main = "<h3>🎨 FLACA – Color Analysis</h3>" + color_form_html(color_defaults)
-    return page_layout(main, "<i>Defaults restored.</i>")
-
+async def color_restore_defaults(): return page_layout("Defaults restored.", sidebar=color_form(color_defaults))
 
 @app.post("/color_analyze", response_class=HTMLResponse)
 async def color_analyze(
-    ref_image: UploadFile = File(...),
+    ref_image: UploadFile = File(None),
+    preprocessed_file: str = Form(None),
+    reuse_path: str = Form(None),
     k: int = Form(5),
     L_thresh: float = Form(30.0),
     C_thresh: float = Form(0.1),
     ab_step: float = Form(1.0),
     point_size: int = Form(12),
-    size_mode: str = Form("sqrt"),
-    top_n_chroma: str = Form(""),
-    top_n_achro: str = Form(""),
-    pie_show_labels: str = Form("True"),
-    show_input: str = Form("True"),
-    show_plots_initial: str = Form("False"),
-    show_plots_final: str = Form("True"),
     random_seed: int = Form(42),
-    shrink_img: float = Form(0.1),
+    shrink_img: float = Form(1),
+    show_plots_final: str = Form("True"),
 ):
     params = locals().copy()
-    params.pop("ref_image")
+    
+    # FIX: Changed loop variable from 'k' to 'key' to avoid overwriting the 'k' parameter
+    for key in ['ref_image', 'preprocessed_file', 'reuse_path']: 
+        params.pop(key, None)
+    
+    src = None
+    if ref_image and ref_image.filename:
+        src = os.path.join(tempfile.mkdtemp(), ref_image.filename)
+        with open(src, "wb") as f: shutil.copyfileobj(ref_image.file, f)
+    elif preprocessed_file and os.path.exists(os.path.join(TEMP_DIR, preprocessed_file)): 
+        src = os.path.join(TEMP_DIR, preprocessed_file)
+    elif reuse_path and os.path.exists(reuse_path): 
+        src = reuse_path
+    
+    if not src: return page_layout("<h3>❌ Error</h3><p>No valid image provided.</p>")
+    
+    try:
+        bundle, img = k_color_analysis(
+            src, k=k, L_thresh=L_thresh, C_thresh=C_thresh, 
+            ab_step=ab_step, point_size=point_size, size_mode="sqrt", 
+            pie_show_labels=True, show_input=True, show_plots_initial=False, 
+            show_plots_final=True, # We always want initial plots for display
+            random_seed=random_seed, shrink_img=shrink_img
+        )
+    except Exception as e: 
+        return page_layout(f"<h3>❌ Analysis Error</h3><p>{e}</p>")
 
-    top_n_chroma = None if not top_n_chroma.strip() else int(top_n_chroma)
-    top_n_achro = None if not top_n_achro.strip() else int(top_n_achro)
-
-    tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, ref_image.filename)
-    with open(tmp_path, "wb") as f:
-        shutil.copyfileobj(ref_image.file, f)
-
-    bundle, img = k_color_analysis(
-        tmp_path, k=k, L_thresh=L_thresh, C_thresh=C_thresh,
-        ab_step=ab_step, point_size=point_size, size_mode=size_mode,
-        top_n_chroma=top_n_chroma, top_n_achro=top_n_achro,
-        pie_show_labels=(pie_show_labels.lower() == "true"),
-        show_input=(show_input.lower() == "true"),
-        show_plots_initial=(show_plots_initial.lower() == "true"),
-        show_plots_final=(show_plots_final.lower() == "true"),
-        random_seed=random_seed, shrink_img=shrink_img,
-    )
-
-    analysis_urls = save_all_open_figures(prefix="analysis")
-    bundle_id = uuid.uuid4().hex
-    active_bundles[bundle_id] = {
-        "bundle": bundle, 
-        "img": img, 
-        "params": params, 
-        "analysis": analysis_urls, 
-        "visuals": [],
-        "type": "color"
+    urls = save_all_open_figures("analysis")
+    bid = uuid.uuid4().hex
+    
+    active_bundles[bid] = {
+        "bundle": bundle, "img": img, "params": params, 
+        "source_path": src, "analysis": urls, "visuals": [], "type": "color"
     }
+    
+    # Redirect to the new dedicated results page
+    return RedirectResponse(url=f"/color_results/{bid}", status_code=303)
 
+
+def render_color_results_page(bundle_id: str, sess: dict):
+    # 1. Get initial plots (first 3 from analysis)
+    # The order is: 0: Input Image, 1: Pie Chart, 2: Palette Plot, 3+: Final Plots (if requested)
+    initial_plots = sess["analysis"]
+    
+    primary_plots_data = [
+        {"url": initial_plots[0], "label": "Input Image"},
+        {"url": initial_plots[1], "label": "Color Palette"},
+        {"url": initial_plots[2], "label": "Pie Chart"},
+    ]
+    
+    # 2. Build Primary Plots HTML
+    primary_plots_html = ""
+    for item in primary_plots_data:
+        primary_plots_html += f"""
+        <div class="gallery-item-large" onclick="openLightbox('{item["url"]}')">
+            <img src="{item["url"]}">
+            <span>{item["label"]}</span>
+        </div>
+        """
+        
+    # 3. Build Inspection Gallery HTML (Reverse order to show newest first)
+    gallery_html = ""
+    if sess["visuals"]:
+        for item in sess["visuals"][::-1]:
+            gallery_html += f"""
+            <div class="gallery-item" onclick="openLightbox('{item["url"]}')">
+                <img src="{item["url"]}">
+                <span>{item["label"]}</span>
+            </div>
+            """
+    
     main = f"""
-      <h3>✅ Color Analysis Complete</h3>
-      <p><strong>Image:</strong> {ref_image.filename} | <strong>K =</strong> {k} colors</p>
-      <div class="info-box">
-        <strong>Results:</strong> The color clustering analysis has been completed. 
-        Scroll down to see the visualizations, then optionally add specific cluster visualizations below.
-      </div>
-      {''.join(f'<img src="{u}" style="max-width: 95%;">' for u in analysis_urls)}
-      <hr>
-      <h4>🔍 Add Cluster Visualization</h4>
-      <form action="/color_visualize" method="post">
-         <input type="hidden" name="bundle_id" value="{bundle_id}">
-         <label>Cluster Name/ID:</label><input name="cluster" required placeholder="e.g., 0, 1, red, blue">
-         <label>Visualization Type:</label>
-         <select name="visualization">
-            <option>highlight</option>
-            <option>mask</option>
-            <option>overlay</option>
-         </select>
-         <input type="submit" value="Add Visualization">
-      </form>
-      <form action="/color_restart" method="post">
-         <input type="hidden" name="bundle_id" value="{bundle_id}">
-         <input type="submit" value="🔄 New Analysis (keep params)">
-      </form>
+        <h3 style="margin-top:0">Analysis Results (k={sess['params']['k']})</h3>
+        
+        <h4>🖼️ Core Visualization</h4>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:15px;">
+            {primary_plots_html}
+        </div>
+
+        <div class="panel" style="margin-top:20px; border-color:var(--primary);">
+            <h4 style="margin-top:0;">🔍 Inspect Cluster</h4>
+            <form action="/color_visualize" method="post" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <input type="hidden" name="bundle_id" value="{bundle_id}">
+                <input name="cluster" placeholder="Cluster ID (e.g. 0)" required style="width:120px; flex-grow:0;">
+                <select name="visualization" style="width:150px; flex-grow:0;">
+                    <option value="highlight">Highlight</option>
+                    <option value="mask">Binary Mask</option>
+                    <option value="overlay">Color Overlay</option>
+                </select>
+                <button type="submit" class="btn" style="margin:0; width:auto; flex-grow:1;">Visualize</button>
+            </form>
+        </div>
+        
+        {f'<h4 style="margin-top:20px;">🗂️ Cluster Inspection Gallery ({len(sess["visuals"])} plots)</h4><div class="gallery-grid">' + gallery_html + '</div>' if gallery_html else '<div class="info-box" style="margin-top:20px;">Use the form above to generate and view cluster-specific masks here.</div>'}
+        
+        <form action="/color_restart" method="post" style="margin-top:20px;"><input type="hidden" name="bundle_id" value="{bundle_id}"><button class="btn btn-secondary">🔄 Restart with New Settings</button></form>
     """
-    return page_layout(main, "<i>No cluster visualizations yet. Use the form to add specific cluster views.</i>")
+    return page_layout(main, sidebar=color_form(sess['params'], reuse_path=sess['source_path']))
+
+
+@app.get("/color_results/{bundle_id}", response_class=HTMLResponse)
+async def color_results_page(bundle_id: str):
+    sess = active_bundles.get(bundle_id)
+    if not sess: return page_layout("<h3>Session Expired</h3><p>The analysis session was not found or has expired.</p>")
+    return render_color_results_page(bundle_id, sess)
 
 
 @app.post("/color_visualize", response_class=HTMLResponse)
-async def color_visualize(bundle_id: str = Form(...), cluster: str = Form(...), visualization: str = Form("highlight")):
+async def color_visualize(bundle_id:str=Form(...), cluster:str=Form(...), visualization:str=Form("highlight")):
     sess = active_bundles.get(bundle_id)
-    if not sess or sess.get("type") != "color": 
-        return page_layout("<h3>❌ Session expired or invalid</h3>", None)
-
+    if not sess: return page_layout("Session Expired")
+    
     visualize_color_cluster(sess["img"], cluster=cluster, bundle=sess["bundle"], visualization=visualization)
-    vis_urls = save_all_open_figures(prefix=f"vis_{cluster}")
-    sess["visuals"].extend(vis_urls)
-
-    main = f"""
-      <h3>✅ Color Analysis & Cluster Visualizations</h3>
-      <div class="info-box">
-        <strong>Main Analysis Results:</strong>
-      </div>
-      {''.join(f'<img src="{u}" style="max-width: 95%;">' for u in sess['analysis'])}
-      <hr>
-      <h4>🔍 Add More Cluster Visualizations</h4>
-      <form action="/color_visualize" method="post">
-         <input type="hidden" name="bundle_id" value="{bundle_id}">
-         <label>Cluster Name/ID:</label><input name="cluster" required placeholder="e.g., 0, 1, red, blue">
-         <label>Visualization Type:</label>
-         <select name="visualization">
-            <option>highlight</option>
-            <option>mask</option>
-            <option>overlay</option>
-         </select>
-         <input type="submit" value="Add Visualization">
-      </form>
-      <form action="/color_restart" method="post">
-         <input type="hidden" name="bundle_id" value="{bundle_id}">
-         <input type="submit" value="🔄 New Analysis (keep params)">
-      </form>
-    """
-    sidebar = f"""
-      <h3>🎨 Cluster Visualizations</h3>
-      {''.join(f'<img src="{u}" style="max-width: 100%;">' for u in sess['visuals']) if sess['visuals'] else '<i>No visualizations yet.</i>'}
-    """
-    return page_layout(main, sidebar)
-
+    new_urls = save_all_open_figures(f"vis_{cluster}")
+    
+    # Add new visualization plots to history
+    for u in new_urls:
+        sess["visuals"].append({"url": u, "label": f"ID {cluster} ({visualization})"})
+    
+    # Redirect back to the unified results page to display the updated gallery
+    return RedirectResponse(url=f"/color_results/{bundle_id}", status_code=303)
 
 @app.post("/color_restart", response_class=HTMLResponse)
 async def color_restart(bundle_id: str = Form(...)):
     sess = active_bundles.get(bundle_id)
-    params = sess["params"] if sess and sess.get("type") == "color" else color_defaults
-    main = "<h3>🔄 Restart Color Analysis</h3>" + color_form_html(params)
-    return page_layout(main, "<i>Previous parameters loaded. Upload new image to analyze.</i>")
+    if sess:
+        # Clear visuals but keep source path and parameters
+        sess['visuals'] = [] 
+        return page_layout("<h3>Restarting...</h3>", sidebar=color_form(sess['params'], reuse_path=sess.get('source_path')))
+    return page_layout("<h3>Session Expired</h3>")
 
 
 # ========== STAIN DETECTION ROUTES ========== #
 
 @app.get("/stain_detection", response_class=HTMLResponse)
 async def stain_detection_page():
-    main = "<h3>🔍 Stain Detection Analysis</h3>" + stain_form_html(stain_defaults)
-    sidebar = """
-    <h4>📖 How It Works</h4>
-    <p><strong>Step 1:</strong> Upload two images (before and after)</p>
-    <p><strong>Step 2:</strong> Images will be automatically aligned using feature detection</p>
-    <p><strong>Step 3:</strong> Interactive windows will appear - select 4 ROI points on each image</p>
-    <p><strong>Step 4:</strong> The algorithm detects dark/gray stains by comparing brightness and saturation</p>
-    <p><strong>Step 5:</strong> View results showing original images, detected stains, and evaluation mask</p>
-    
-    <h4 style="margin-top: 20px;">🎯 Best Practices</h4>
-    <ul style="font-size: 0.9em; line-height: 1.6;">
-        <li>Use similar lighting conditions</li>
-        <li>Ensure images have overlapping areas</li>
-        <li>Select ROI points carefully in clockwise order</li>
-        <li>Adjust thresholds if detection is too sensitive or not sensitive enough</li>
-    </ul>
+    sidebar = f"""
+    <h3>Settings</h3>
+    <form action="/stain_analyze" enctype="multipart/form-data" method="post">
+        <label>Before Image</label><input type="file" name="image_before" required>
+        <label>After Image</label><input type="file" name="image_after" required>
+        
+        <label>Dark Thresh</label><input type="number" name="dark_thresh" value="120">
+        <label>Sat Thresh</label><input type="number" name="sat_thresh" value="60">
+        <input type="submit" value="Analyze">
+    </form>
+    """
+    main = """
+    <div class="info-box">
+        <h4>🔍 Instructions</h4>
+        <p>1. Upload both images.</p>
+        <p>2. Interactive windows will open on the server/local machine.</p>
+        <p>3. Select 4 points (Top-Left clockwise) on each image.</p>
+    </div>
     """
     return page_layout(main, sidebar)
 
-
-@app.post("/stain_restore_defaults", response_class=HTMLResponse)
-async def stain_restore_defaults():
-    main = "<h3>🔍 Stain Detection Analysis</h3>" + stain_form_html(stain_defaults)
-    return page_layout(main, "<i>Defaults restored.</i>")
-
-
 @app.post("/stain_analyze", response_class=HTMLResponse)
-async def stain_analyze(
-    image_before: UploadFile = File(...),
-    image_after: UploadFile = File(...),
-    dark_thresh: int = Form(120),
-    sat_thresh: int = Form(60),
-    diff_thresh: int = Form(25),
-):
-    params = {
-        "dark_thresh": dark_thresh,
-        "sat_thresh": sat_thresh,
-        "diff_thresh": diff_thresh,
-    }
-
-    # Save uploaded files temporarily
-    tmp_dir = tempfile.mkdtemp()
-    path_before = os.path.join(tmp_dir, image_before.filename)
-    path_after = os.path.join(tmp_dir, image_after.filename)
-    
-    with open(path_before, "wb") as f:
-        shutil.copyfileobj(image_before.file, f)
-    
-    with open(path_after, "wb") as f:
-        shutil.copyfileobj(image_after.file, f)
-
+async def stain_analyze(image_before: UploadFile = File(...), image_after: UploadFile = File(...), dark_thresh: int = Form(120), sat_thresh: int = Form(60), diff_thresh: int = Form(25)):
+    tmp = tempfile.mkdtemp()
+    pA = os.path.join(tmp, image_before.filename); pB = os.path.join(tmp, image_after.filename)
+    with open(pA, "wb") as f: shutil.copyfileobj(image_before.file, f)
+    with open(pB, "wb") as f: shutil.copyfileobj(image_after.file, f)
     try:
-        # Run stain detection (this will open OpenCV windows for ROI selection)
-        ratio = detect_stains(
-            pathA=path_before,
-            pathB=path_after,
-            dark_thresh=dark_thresh,
-            sat_thresh=sat_thresh,
-            diff_thresh=diff_thresh,
-            plot=True
-        )
+        ratio = detect_stains(pA, pB, dark_thresh, sat_thresh, diff_thresh, plot=True)
+        urls = save_all_open_figures("stain")
         
-        # Save all generated plots
-        result_urls = save_all_open_figures(prefix="stain_result")
+        gallery_html = "".join(f'<div class="gallery-item" onclick="openLightbox(\'{u}\')"><img src="{u}"><span>Stain Result</span></div>' for u in urls)
         
-        bundle_id = uuid.uuid4().hex
-        active_bundles[bundle_id] = {
-            "params": params,
-            "results": result_urls,
-            "ratio": ratio,
-            "type": "stain"
-        }
-
-        main = f"""
-          <h3>✅ Stain Detection Complete</h3>
-          <div class="info-box">
-            <p><strong>Before Image:</strong> {image_before.filename}</p>
-            <p><strong>After Image:</strong> {image_after.filename}</p>
-            <p><strong>Stain Ratio:</strong> {ratio:.4f} ({ratio*100:.2f}% of ROI area)</p>
-          </div>
-          
-          <h4>📊 Analysis Results</h4>
-          <p>The images below show:</p>
-          <ul>
-            <li><strong>Original B:</strong> The "after" image in the analysis frame</li>
-            <li><strong>Detected Black Stains:</strong> Stains highlighted in red overlay</li>
-            <li><strong>Original A:</strong> The "before" (reference) image</li>
-            <li><strong>Stain Mask:</strong> Binary mask showing ROI (white) and detected stains (red)</li>
-          </ul>
-          
-          {''.join(f'<img src="{u}" style="max-width: 95%; margin: 10px 0;">' for u in result_urls)}
-          
-          <hr>
-          <form action="/stain_restart" method="post">
-             <input type="hidden" name="bundle_id" value="{bundle_id}">
-             <input type="submit" value="🔄 New Analysis (keep params)">
-          </form>
-        """
-        
-        sidebar = f"""
-          <h4>📈 Detection Statistics</h4>
-          <p><strong>Stain Ratio:</strong> {ratio:.4f}</p>
-          <p><strong>Percentage:</strong> {ratio*100:.2f}%</p>
-          
-          <h4>⚙️ Parameters Used</h4>
-          <p><strong>Dark Threshold:</strong> {dark_thresh}</p>
-          <p><strong>Saturation Threshold:</strong> {sat_thresh}</p>
-          <p><strong>Difference Threshold:</strong> {diff_thresh}</p>
-          
-          <div class="info-box" style="margin-top: 20px;">
-            <strong>💡 Interpretation:</strong><br>
-            The stain ratio indicates what fraction of the Region of Interest (ROI) 
-            has been identified as containing dark/gray stains compared to the reference image.
-          </div>
-        """
-        
-        return page_layout(main, sidebar)
-        
-    except Exception as e:
-        main = f"""
-          <h3>❌ Error During Stain Detection</h3>
-          <div class="info-box" style="border-color: #c1440e;">
-            <p><strong>Error:</strong> {str(e)}</p>
-            <p>Please ensure:</p>
-            <ul>
-              <li>Both images are valid and can be loaded</li>
-              <li>Images have sufficient overlapping features for alignment</li>
-              <li>You selected all 4 ROI points correctly in the OpenCV windows</li>
-            </ul>
-          </div>
-          <form action="/stain_detection" method="get">
-             <input type="submit" value="← Back to Stain Detection">
-          </form>
-        """
-        return page_layout(main, "<i>Analysis failed. See error details.</i>")
-    finally:
-        # Cleanup temporary files
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@app.post("/stain_restart", response_class=HTMLResponse)
-async def stain_restart(bundle_id: str = Form(...)):
-    sess = active_bundles.get(bundle_id)
-    params = sess["params"] if sess and sess.get("type") == "stain" else stain_defaults
-    main = "<h3>🔄 Restart Stain Detection</h3>" + stain_form_html(params)
-    return page_layout(main, "<i>Previous parameters loaded. Upload new images to analyze.</i>")
-
-
-# ========== SERVER STARTUP ========== #
+        return page_layout(f"<h3>Result: {ratio:.4f}</h3><h4 style='margin-top:20px;'>🗂️ Analysis Plots</h4><div class='gallery-grid'>{gallery_html}</div>")
+    except Exception as e: return page_layout(f"Error: {e}")
 
 if __name__ == "__main__":
     print("🏺 Starting Archaeological Image Analysis Suite...")
-    print("📍 Access the application at: http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -38,7 +38,7 @@ These variables are active and have a change on the analysis
 ### Results (Final Plots)
 #### Grouping
 ![image info](./media/palette.png)
-This Plot shows the color palette and the grouping into the desired number of colors. As mentioned above the grouping is done automatically on euclidean color distance in LAB space. There are two palettes to be more precise. One for the chromatic pixels and one for achromatic ones. The groupings are symbolized by using
+This Plot shows the color palette and the grouping into the desired number of colors. As mentioned above the grouping is done automatically on euclidean color distance in LAB space. There are two palettes to be more precise. One for the chromatic pixels and one for achromatic ones. The groupings are symbolized by the color boundaries 
 
 
 # How to Install FLACA (for Total Beginners)
