@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 # Import custom modules
 from ColorClassifier_manual import k_color_analysis, visualize_color_cluster
-from stain_detection import detect_stains
+# from stain_detection import detect_stains # REMOVED: Stain Detection Import
 
 app = FastAPI(title="Archaeological Image Analysis Suite")
 
@@ -42,9 +42,9 @@ color_defaults = {
     "show_plots_final": "True", "random_seed": 42, "shrink_img": 1.0,
 }
 
-stain_defaults = {
-    "dark_thresh": 120, "sat_thresh": 60, "diff_thresh": 25,
-}
+# stain_defaults = { # REMOVED: Stain Defaults
+#     "dark_thresh": 120, "sat_thresh": 60, "diff_thresh": 25,
+# }
 
 # ---------- Helpers ---------- #
 def save_all_open_figures(prefix="plot"):
@@ -530,7 +530,7 @@ def modern_style():
     """
 
 def page_layout(main, sidebar=None, show_nav=True):
-    nav_html = """<nav><a href="/">🏠 Home</a><a href="/polygon_cutter">✂️ Polygon Cutter</a><a href="/color_analysis">🎨 Color Analysis</a><a href="/stain_detection">🔍 Stain Detection</a></nav>""" if show_nav else ""
+    nav_html = """<nav><a href="/">🏠 Home</a><a href="/polygon_cutter">✂️ Polygon Cutter</a><a href="/color_analysis">🎨 Color Analysis</a></nav>""" if show_nav else "" # MODIFIED: Removed Stain Detection link
     content = f"""<main><div class="panel sidebar">{sidebar}</div><div class="panel analysis">{main}</div></main>""" if sidebar else f"""<main class="full-width"><div class="panel">{main}</div></main>"""
     
     return f"""
@@ -573,11 +573,9 @@ async def home():
         <a href="/color_analysis" style="background:var(--bg-panel); border-radius:var(--radius); padding:2rem; text-align:center; border:1px solid var(--border); text-decoration:none; color:inherit; display:block;">
             <div style="font-size:3rem; margin-bottom:1rem;">🎨</div><h2>Color Analysis</h2><p style="color:var(--text-sub)">Automated clustering (FLACA).</p>
         </a>
-        <a href="/stain_detection" style="background:var(--bg-panel); border-radius:var(--radius); padding:2rem; text-align:center; border:1px solid var(--border); text-decoration:none; color:inherit; display:block;">
-            <div style="font-size:3rem; margin-bottom:1rem;">🔍</div><h2>Stain Detection</h2><p style="color:var(--text-sub)">Quantify degradation.</p>
-        </a>
+        
     </div>
-    """
+    """ # MODIFIED: Removed Stain Detection card
     return page_layout(main, sidebar=None, show_nav=True)
 
 # ========== POLYGON CUTTER ROUTES ========== #
@@ -866,45 +864,18 @@ async def color_restart(bundle_id: str = Form(...)):
     return page_layout("<h3>Session Expired</h3>")
 
 
-# ========== STAIN DETECTION ROUTES ========== #
+# ========== STAIN DETECTION ROUTES ========== # # REMOVED: All Stain Detection Code
 
-@app.get("/stain_detection", response_class=HTMLResponse)
-async def stain_detection_page():
-    sidebar = f"""
-    <h3>Settings</h3>
-    <form action="/stain_analyze" enctype="multipart/form-data" method="post">
-        <label>Before Image</label><input type="file" name="image_before" required>
-        <label>After Image</label><input type="file" name="image_after" required>
-        
-        <label>Dark Thresh</label><input type="number" name="dark_thresh" value="120">
-        <label>Sat Thresh</label><input type="number" name="sat_thresh" value="60">
-        <input type="submit" value="Analyze">
-    </form>
-    """
-    main = """
-    <div class="info-box">
-        <h4>🔍 Instructions</h4>
-        <p>1. Upload both images.</p>
-        <p>2. Interactive windows will open on the server/local machine.</p>
-        <p>3. Select 4 points (Top-Left clockwise) on each image.</p>
-    </div>
-    """
-    return page_layout(main, sidebar)
+# @app.get("/stain_detection", response_class=HTMLResponse)
+# async def stain_detection_page():
+#     # ... UI for stain detection removed
+#     pass
 
-@app.post("/stain_analyze", response_class=HTMLResponse)
-async def stain_analyze(image_before: UploadFile = File(...), image_after: UploadFile = File(...), dark_thresh: int = Form(120), sat_thresh: int = Form(60), diff_thresh: int = Form(25)):
-    tmp = tempfile.mkdtemp()
-    pA = os.path.join(tmp, image_before.filename); pB = os.path.join(tmp, image_after.filename)
-    with open(pA, "wb") as f: shutil.copyfileobj(image_before.file, f)
-    with open(pB, "wb") as f: shutil.copyfileobj(image_after.file, f)
-    try:
-        ratio = detect_stains(pA, pB, dark_thresh, sat_thresh, diff_thresh, plot=True)
-        urls = save_all_open_figures("stain")
-        
-        gallery_html = "".join(f'<div class="gallery-item" onclick="openLightbox(\'{u}\')"><img src="{u}"><span>Stain Result</span></div>' for u in urls)
-        
-        return page_layout(f"<h3>Result: {ratio:.4f}</h3><h4 style='margin-top:20px;'>🗂️ Analysis Plots</h4><div class='gallery-grid'>{gallery_html}</div>")
-    except Exception as e: return page_layout(f"Error: {e}")
+# @app.post("/stain_analyze", response_class=HTMLResponse)
+# async def stain_analyze(image_before: UploadFile = File(...), image_after: UploadFile = File(...), dark_thresh: int = Form(120), sat_thresh: int = Form(60), diff_thresh: int = Form(25)):
+#     # ... logic for stain detection removed
+#     pass
+
 
 if __name__ == "__main__":
     print("🏺 Starting Archaeological Image Analysis Suite...")
