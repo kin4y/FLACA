@@ -36,8 +36,8 @@ These variables are active and have a change on the analysis
 For pictures which despict objects which are orthogonal to the camera, but not a rectangular object you can use the polygon cutting tool in order to cut out the desired area in any polygon and as many you want. From there you can head directly to the color analysis. 
 
 # Screen Shots 
-![](sc1.jpg "Home")
-![](sc2.jpg "Polygon Cutter")
-![](sc3.jpg "Settings")
-![](sc4.jpg "Resuls")
+![](media/sc1.jpg "Home")
+![](media/sc2.jpg "Polygon Cutter")
+![](media/sc3.jpg "Settings")
+![](media/sc4.jpg "Resuls")
 
