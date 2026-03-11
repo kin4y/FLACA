@@ -6,7 +6,13 @@ __pycache__/
 
 # Ignore Jupyter notebook files
 *.ipynb
-
+*.png
+*.JPEG
+*.jpg
+*.jpeg
+/surface_percent_data
+/debug_3d
+/temp_uploads
 # Ignore Jupyter notebook checkpoint folders and files
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
