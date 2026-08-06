@@ -28,3 +28,5 @@ with open(".gitignore", "w") as f:
     f.write(gitignore_content)
 
 print("Created .gitignore!")
+
+sam2_b.pt
